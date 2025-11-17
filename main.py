@@ -1,20 +1,16 @@
 from typing import Any
-from astrbot.api.event import filter
+
 import astrbot.api.message_components as Comp
+from astrbot import logger
+from astrbot.api.event import filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
-from astrbot import logger
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
 
-@register(
-    "astrbot_plugin_portrayal",
-    "Zhalslar",
-    "分析群友的性格画像",
-    "1.0.3",
-)
+@register("astrbot_plugin_portrayal", "Zhalslar", "...", "...")
 class Relationship(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -137,9 +133,9 @@ class Relationship(Star):
             contexts = self.contexts_cache[target_id]
         else:
             # 每轮查询200条消息，200轮查询4w条消息,几乎接近漫游极限
-            target_query_rounds = min(
-                200, max(0, max_query_rounds or int(self.conf["max_query_rounds"]))
-            )
+            if max_query_rounds is None:
+                max_query_rounds = int(self.conf["max_query_rounds"])
+            target_query_rounds = min(200, max(0, max_query_rounds))
             yield event.plain_result(
                 f"正在发起{target_query_rounds}轮查询来获取{nickname}的消息..."
             )
