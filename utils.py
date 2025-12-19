@@ -4,20 +4,19 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 
 
-async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
-    """获取指定群友的群昵称或Q名"""
-    client = event.bot
-    group_id = event.get_group_id()
-    if group_id:
-        member_info = await client.get_group_member_info(
-            group_id=int(group_id), user_id=int(user_id)
-        )
-        return member_info.get("card") or member_info.get("nickname")
-    else:
-        stranger_info = await client.get_stranger_info(user_id=int(user_id))
-        return stranger_info.get("nickname")
+async def get_nickname_gender(
+    event: AiocqhttpMessageEvent, user_id: str | int
+) -> tuple[str, str]:
+    """获取指定群友的昵称和性别"""
+    all_info = await event.bot.get_group_member_info(
+        group_id=int(event.get_group_id()), user_id=int(user_id)
+    )
+    nickname = all_info.get("card") or all_info.get("nickname")
+    gender = all_info.get("sex")
+    return nickname, gender
 
-async def get_at_id(self, event: AiocqhttpMessageEvent) -> str | None:
+
+def get_at_id(event: AiocqhttpMessageEvent) -> str | None:
     return next(
         (
             str(seg.qq)

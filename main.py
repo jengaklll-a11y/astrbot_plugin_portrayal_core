@@ -8,7 +8,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
-from .utils import get_at_id, get_nickname
+from .utils import get_at_id, get_nickname_gender
 
 
 class PortrayalPlugin(Star):
@@ -100,8 +100,8 @@ class PortrayalPlugin(Star):
         """
         画像 @群友 <查询轮数>
         """
-        target_id: str = await get_at_id(event) or event.get_sender_id()
-        nickname, gender = await get_nickname(event, target_id)
+        target_id: str = get_at_id(event) or event.get_sender_id()
+        nickname, gender = await get_nickname_gender(event, target_id)
         contexts, query_rounds = None, None
         if self.contexts_cache and target_id in self.contexts_cache:
             contexts = self.contexts_cache[target_id]
