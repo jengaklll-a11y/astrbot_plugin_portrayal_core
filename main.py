@@ -120,10 +120,17 @@ class PortrayalPlugin(Star):
         nickname, gender = await self._get_user_nickname_gender(event, target_id)
         
         args = event.message_str.split()
-        rounds = int(args[-1]) if args and args[-1].isdigit() else self.config.get("max_query_rounds", 20)
+        
+        # 判断是否手动输入了轮数
+        has_custom_rounds = args and args[-1].isdigit()
+        rounds = int(args[-1]) if has_custom_rounds else self.config.get("max_query_rounds", 20)
         rounds = min(50, max(1, rounds))
 
-        yield event.plain_result(f"🔍 正在回溯 {nickname} 的最近消息并构建画像，请稍候...")
+        # 根据是否手动输入轮数，发送不同的提示消息
+        if has_custom_rounds:
+            yield event.plain_result(f"🔍 正在回溯 {nickname} 的最近 {rounds} 轮消息并构建画像，请稍候...")
+        else:
+            yield event.plain_result(f"🔍 正在回溯 {nickname} 的最近消息并构建画像，请稍候...")
 
         history = await self._fetch_user_history(event, target_id, rounds)
         if not history:
