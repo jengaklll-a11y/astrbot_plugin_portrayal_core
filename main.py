@@ -1,5 +1,7 @@
 from astrbot.api.event import filter
-from astrbot.api.star import Context, Star, AstrBotConfig
+from astrbot.api.star import Context, Star
+# 修正：AstrBotConfig 需要从 core 模块导入
+from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.api import logger
 from astrbot.core.message.components import At
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
