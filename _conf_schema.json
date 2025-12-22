@@ -8,7 +8,7 @@
     "enable_image_output": {
         "description": "是否生成图片",
         "type": "bool",
-        "default": false,
+        "default": true,
         "hint": "开启后将把分析结果渲染为图片发送（需要服务端支持绘图或自行实现渲染逻辑），关闭则发送纯文本"
     },
     "max_msg_count": {
