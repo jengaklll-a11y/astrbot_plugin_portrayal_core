@@ -1,149 +1,124 @@
-from typing import Any
-
-from astrbot.api import logger
 from astrbot.api.event import filter
-from astrbot.api.star import Context, Star
-from astrbot.core.config.astrbot_config import AstrBotConfig
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-    AiocqhttpMessageEvent,
-)
-
-from .utils import get_at_id, get_nickname_gender
-
+from astrbot.api.star import Context, Star, AstrBotConfig
+from astrbot.api import logger
+from astrbot.core.message.components import At
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
 class PortrayalPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.conf = config
-        # 上下文缓存
-        self.contexts_cache: dict[str, list[dict[str, str]]] = {}
+        self.config = config
 
-    def _build_user_context(
-        self, round_messages: list[dict[str, Any]], target_id: str
-    ) -> list[dict[str, str]]:
-        """
-        把指定用户在所有回合里的纯文本消息打包成 openai-style 的 user 上下文。
-        """
+    def _get_target_info(self, event: AiocqhttpMessageEvent):
+        """解析目标用户ID (从At或发送者)"""
+        for seg in event.get_messages():
+            if isinstance(seg, At) and str(seg.qq) != event.get_self_id():
+                return str(seg.qq)
+        return event.get_sender_id()
 
-        contexts: list[dict[str, str]] = []
+    async def _get_user_nickname_gender(self, event: AiocqhttpMessageEvent, user_id: str):
+        """获取昵称和性别"""
+        try:
+            info = await event.bot.get_group_member_info(
+                group_id=int(event.get_group_id()), user_id=int(user_id)
+            )
+            return info.get("card") or info.get("nickname") or "群友", info.get("sex", "unknown")
+        except Exception:
+            return "群友", "unknown"
 
-        for msg in round_messages:
-            # 1. 过滤发送者
-            if msg["sender"]["user_id"] != int(target_id):
-                continue
+    async def _fetch_user_history(self, event: AiocqhttpMessageEvent, target_id: str, max_rounds: int):
+        """核心：循环拉取历史消息并过滤出目标用户的纯文本"""
+        contexts = []
+        message_seq = 0
+        group_id = event.get_group_id()
+        
+        # 将配置的 float/str 转为 int，确保安全
+        max_msg_limit = int(self.config.get("max_msg_count", 500))
 
-            # 2. 提取并拼接所有 text 片段
-            text_segments = [
-                seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"
-            ]
-            text = "".join(text_segments).strip()
-            # 3. 仅当真正说了话才保留
-            if text:
-                print(text)
-                contexts.append({"role": "user", "content": text})
+        for _ in range(max_rounds):
+            if len(contexts) >= max_msg_limit:
+                break
+
+            payload = {
+                "group_id": group_id,
+                "message_seq": message_seq,
+                "count": 100, # 每次拉取100条
+            }
+            try:
+                # 适配部分非OneBot标准的实现，尝试不同参数
+                result = await event.bot.api.call_action("get_group_msg_history", **payload)
+                messages = result.get("messages", [])
+            except Exception as e:
+                logger.warning(f"拉取历史消息失败: {e}")
+                break
+
+            if not messages:
+                break
+            
+            # 更新 seq 以便下次拉取更早的消息
+            message_seq = messages[0]["message_id"]
+
+            # 倒序遍历（从新到旧），提取目标用户的文本
+            for msg in messages:
+                if str(msg["sender"]["user_id"]) != target_id:
+                    continue
+                
+                # 提取纯文本部分
+                text_content = "".join([
+                    seg["data"]["text"] 
+                    for seg in msg["message"] 
+                    if seg["type"] == "text"
+                ]).strip()
+
+                if text_content:
+                    contexts.append({"role": "user", "content": text_content})
 
         return contexts
 
-    async def get_msg_contexts(
-        self, event: AiocqhttpMessageEvent, target_id: str, max_query_rounds: int
-    ) -> tuple[list[dict], int]:
-        """持续获取群聊历史消息直到达到要求"""
-        group_id = event.get_group_id()
-        query_rounds = 0
-        message_seq = 0
-        contexts: list[dict] = []
-        while len(contexts) < self.conf["max_msg_count"]:
-            payloads = {
-                "group_id": group_id,
-                "message_seq": message_seq,
-                "count": 200,
-                "reverseOrder": True,
-            }
-            result: dict = await event.bot.api.call_action(
-                "get_group_msg_history", **payloads
-            )
-            round_messages = result["messages"]
-            if not round_messages:
-                break
-            message_seq = round_messages[0]["message_id"]
-
-            contexts.extend(self._build_user_context(round_messages, target_id))
-            query_rounds += 1
-            if query_rounds >= max_query_rounds:
-                break
-        return contexts, query_rounds
-
-    async def get_llm_respond(
-        self, nickname: str, gender: str, contexts: list[dict]
-    ) -> str | None:
-        """调用llm回复"""
-        get_using = self.context.get_using_provider()
-        if not get_using:
-            return None
-        try:
-            system_prompt = self.conf["system_prompt_template"].format(
-                nickname=nickname, gender=("他" if gender == "male" else "她")
-            )
-            llm_response = await get_using.text_chat(
-                system_prompt=system_prompt,
-                prompt=f"这是 {nickname} 的聊天记录",
-                contexts=contexts,
-            )
-            return llm_response.completion_text
-
-        except Exception as e:
-            logger.error(f"LLM 调用失败：{e}")
-            return None
-
     @filter.command("画像")
-    async def get_portrayal(self, event: AiocqhttpMessageEvent):
-        """
-        画像 @群友 <查询轮数>
-        """
-        target_id: str = get_at_id(event) or event.get_sender_id()
-        nickname, gender = await get_nickname_gender(event, target_id)
-        contexts, query_rounds = None, None
-        if self.contexts_cache and target_id in self.contexts_cache:
-            contexts = self.contexts_cache[target_id]
-        else:
-            # 每轮查询200条消息，200轮查询4w条消息,几乎接近漫游极限
-            end_parm = event.message_str.split(" ")[-1]
-            max_query_rounds = (
-                int(end_parm) if end_parm.isdigit() else self.conf["max_query_rounds"]
-            )
-            target_query_rounds = min(200, max(0, max_query_rounds))
-            yield event.plain_result(
-                f"正在发起{target_query_rounds}轮查询来获取{nickname}的消息..."
-            )
-            contexts, query_rounds = await self.get_msg_contexts(
-                event, target_id, target_query_rounds
-            )
-            self.contexts_cache[target_id] = contexts
-        if not contexts:
-            yield event.plain_result("没有找到该群友的任何消息")
+    async def generate_portrayal(self, event: AiocqhttpMessageEvent):
+        """指令入口"""
+        provider = self.context.get_using_provider()
+        if not provider:
+            yield event.plain_result("❌ 未配置 LLM 服务，无法分析。")
             return
 
-        if query_rounds:
-            yield event.plain_result(
-                f"已从{query_rounds * 200}条群消息中获取了{len(contexts)}条{nickname}的消息，正在分析..."
-            )
-        else:
-            yield event.plain_result(
-                f"已从缓存中获取了{len(contexts)}条{nickname}的消息，正在分析..."
-            )
+        # 1. 确定目标
+        target_id = self._get_target_info(event)
+        nickname, gender = await self._get_user_nickname_gender(event, target_id)
+        
+        # 2. 解析可选的轮数参数
+        args = event.message_str.split()
+        rounds = int(args[-1]) if args and args[-1].isdigit() else self.config.get("max_query_rounds", 20)
+        rounds = min(50, max(1, rounds)) # 限制范围 1-50
 
+        yield event.plain_result(f"🔍 正在回溯 {nickname} 的最近消息 (最大{rounds}轮)...")
+
+        # 3. 获取数据
+        history = await self._fetch_user_history(event, target_id, rounds)
+        
+        if not history:
+            yield event.plain_result(f"⚠️ 未找到 {nickname} 的有效发言记录。")
+            return
+
+        yield event.plain_result(f"✅ 收集到 {len(history)} 条发言，正在构建画像...")
+
+        # 4. 构建提示词并请求 LLM
+        gender_cn = "他" if gender == "male" else ("她" if gender == "female" else "TA")
+        system_prompt = self.config.get("system_prompt_template", "").format(
+            nickname=nickname, gender=gender_cn
+        )
+        
         try:
-            llm_respond = await self.get_llm_respond(nickname, gender, contexts)
-            if llm_respond:
-                url = await self.text_to_image(llm_respond)
-                yield event.image_result(url)
-                del self.contexts_cache[target_id]
-            else:
-                yield event.plain_result("LLM响应为空")
+            response = await provider.text_chat(
+                prompt=f"以下是 {nickname} 的聊天记录，请根据 System Prompt 要求进行分析：",
+                system_prompt=system_prompt,
+                contexts=history  # 这里直接传入 list[dict]
+            )
+            
+            # 5. 输出结果 (Markdown 格式)
+            yield event.plain_result(response.completion_text)
+            
         except Exception as e:
-            logger.error(f"LLM 调用失败：{e}")
-            yield event.plain_result(f"分析失败:{e}")
-
-    async def terminate(self):
-        """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
-        self.contexts_cache.clear()
+            logger.error(f"画像生成失败: {e}")
+            yield event.plain_result(f"❌ 分析过程中发生错误: {e}")
