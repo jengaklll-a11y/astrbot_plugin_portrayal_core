@@ -20,11 +20,11 @@ _✨ 深度人物画像插件 (Core 重构版) ✨_
 
 | 配置项 | 类型 | 说明 | 默认值 |
 | --- | --- | --- | --- |
-| `llm_provider_id` | String | **[核心]** 指定用于分析的模型 ID，留空则使用当前会话的模型。| `""` |
+| `llm_provider_id` | String | **[核心]** 指定用于分析的模型 ID，留空则使用当前会话的模型。|
 | `enable_image_output` | Bool | **[核心]** 是否生成图片卡片。开启后将发送高清渲染图，关闭则发送 Markdown 文本。 | `false` |
 | `max_msg_count` | Int | 分析时使用的最大消息条数限制（越多越准，但也越消耗 Token）。 | `500` |
 | `max_query_rounds` | Int | 默认回溯历史消息的轮数（每轮约 100 条）。 | `20` |
-| `system_prompt_template` | Text | 自定义 LLM 的系统提示词模板，支持 `{nickname}` 和 `{gender}` 变量。 | (见默认配置) |
+| `system_prompt_template` | Text | 自定义 LLM 的系统提示词模板| (见默认配置) |
 
 ## ⌨️ 使用指令
 
