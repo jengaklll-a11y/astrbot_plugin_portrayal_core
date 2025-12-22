@@ -1,20 +1,7 @@
-没问题，这是为您根据最新重构代码和 `metadata.yaml` 信息编写的完整 `README.md` 文件。请直接复制使用：
-
-```markdown
-<div align="center">
-
-![:name](https://count.getloli.com/@astrbot_plugin_portrayal_core?name=astrbot_plugin_portrayal_core&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
-
 # AstrBot Plugin Portrayal Core
 
-_✨ [AstrBot](https://github.com/Soulter/AstrBot) 深度人物画像插件 (Core 重构版) ✨_  
+_✨ 深度人物画像插件 (Core 重构版) ✨_  
 
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![AstrBot](https://img.shields.io/badge/AstrBot-3.4%2B-orange.svg)](https://github.com/Soulter/AstrBot)
-[![GitHub](https://img.shields.io/badge/作者-jengaklll--a11y-blue)](https://github.com/jengaklll-a11y)
-
-</div>
 
 ## 💡 介绍
 
@@ -23,26 +10,10 @@ _✨ [AstrBot](https://github.com/Soulter/AstrBot) 深度人物画像插件 (Cor
 它通过回溯群聊历史记录，利用指定的大语言模型（LLM）深度分析目标群友的性格特质（MBTI、行文风格、潜在职业等），并生成高清的分析卡片。
 
 **🔥 Core 版本特性：**
-- **💎 高清画质渲染**：内置 HTML 样式增强，生成的分析卡片清晰锐利，适配移动端阅读。
 - **🤖 指定模型分析**：支持独立配置用于分析的 LLM 模型（如使用擅长长文本的模型），不占用对话默认模型。
 - **🧹 智能上下文获取**：自动过滤无效信息，精准提取目标用户的纯文本发言。
 - **🛡️ 稳健的引用回复**：图片模式下自动引用原文，拒绝刷屏，体验丝滑。
 - **⚙️ 灵活的开关控制**：支持纯文本/图片模式切换，支持自动降级回退。
-
-## 📦 安装
-
-### 方法一：插件市场安装
-在 AstrBot 管理面板的“插件”页面搜索 `astrbot_plugin_portrayal_core` 进行安装。
-
-### 方法二：手动安装
-```bash
-# 进入插件目录
-cd /AstrBot/data/plugins
-# 克隆仓库
-git clone [https://github.com/jengaklll-a11y/astrbot_plugin_portrayal_core](https://github.com/jengaklll-a11y/astrbot_plugin_portrayal_core)
-# 重启 AstrBot
-
-```
 
 ## ⚙️ 配置说明
 
@@ -81,11 +52,7 @@ A: 请检查 AstrBot 是否配置了模型提供商。如果你在插件配置�
 A: 插件内置了自动降级机制。如果服务器网络原因导致图片无法上传或渲染失败，会自动发送文本结果，确保你一定能收到回复。
 
 **Q: 如何让图片更清晰？**
-A: 本插件已内置高清优化逻辑（强制 22px 字号渲染）。如果仍然觉得模糊，请检查 AstrBot 本身的绘图服务配置。
-
-## 📜 开源协议
-
-[MIT License](https://www.google.com/search?q=LICENSE)
+A: 请检查 AstrBot 本身的绘图服务配置。
 
 ```
 
