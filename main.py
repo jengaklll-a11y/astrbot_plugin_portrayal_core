@@ -1,8 +1,8 @@
+import asyncio
 from astrbot.api.event import filter
 from astrbot.api.star import Context, Star
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.api import logger
-# 引入标准消息组件
 from astrbot.api.message_components import At, Reply, Image, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
@@ -10,9 +10,10 @@ class PortrayalPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self.texts_cache: dict[str, list[str]] = {}
 
     def _get_target_info(self, event: AiocqhttpMessageEvent):
-        """解析目标用户ID (从At或发送者)"""
+        """解析目标用户ID"""
         for seg in event.get_messages():
             if isinstance(seg, At) and str(seg.qq) != event.get_self_id():
                 return str(seg.qq)
@@ -28,39 +29,95 @@ class PortrayalPlugin(Star):
         except Exception:
             return "群友", "unknown"
 
-    async def _fetch_user_history(self, event: AiocqhttpMessageEvent, target_id: str, max_rounds: int):
-        """核心：循环拉取历史消息并过滤出目标用户的纯文本"""
-        contexts = []
-        message_seq = 0
-        group_id = event.get_group_id()
-        max_msg_limit = int(self.config.get("max_msg_count", 500))
+    # ================= 历史抓取逻辑 (配置化 Batch Size) =================
 
-        for _ in range(max_rounds):
-            if len(contexts) >= max_msg_limit:
-                break
+    async def _fetch_next_batch_robust(self, client, group_id, cursor_seq, error_strike_ref):
+        """[底层] 获取单批次消息 (防1200错误 + 指数跳跃 + 动态Batch)"""
+        batch_size = self.config.get("batch_size", 100)
+        
+        try:
             payload = {
-                "group_id": group_id,
-                "message_seq": message_seq,
-                "count": 100,
+                "group_id": int(group_id),
+                "count": batch_size,
+                "reverseOrder": True
             }
-            try:
-                result = await event.bot.api.call_action("get_group_msg_history", **payload)
-                messages = result.get("messages", [])
-            except Exception as e:
-                break
-            if not messages:
-                break
-            message_seq = messages[0]["message_id"]
-            for msg in messages:
-                if str(msg["sender"]["user_id"]) != target_id:
-                    continue
-                text_content = "".join([seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"]).strip()
-                if text_content:
-                    contexts.append({"role": "user", "content": text_content})
-        return contexts
+            if cursor_seq > 0:
+                payload["message_seq"] = cursor_seq
+
+            res = await client.api.call_action("get_group_msg_history", **payload)
+            
+            if not res or not isinstance(res, dict): return [], 0, False
+            batch = res.get("messages", [])
+            if not batch: return [], 0, True 
+            
+            oldest_msg = batch[0]
+            next_cursor = int(oldest_msg.get("message_seq") or oldest_msg.get("message_id") or 0)
+            
+            if error_strike_ref[0] > 0:
+                error_strike_ref[0] = 0
+                
+            return batch, next_cursor, True
+
+        except Exception as e:
+            err_msg = str(e)
+            if "1200" in err_msg or "不存在" in err_msg:
+                error_strike_ref[0] += 1
+                current_strike = error_strike_ref[0]
+                base_jump = max(50, batch_size) 
+                jump_step = base_jump * (2 ** (min(current_strike, 10) - 1))
+                
+                if current_strike == 1 or current_strike % 5 == 0:
+                    logger.warning(f"Portrayal: 游标 {cursor_seq} 处断层 (重试 {current_strike} 次)，向下跳跃 {jump_step} 条...")
+                
+                new_cursor = cursor_seq - jump_step
+                return [], new_cursor, False 
+            else:
+                logger.warning(f"Portrayal: API请求中断: {e}")
+                return [], 0, True
+
+    async def _fetch_user_history_smart(self, event: AiocqhttpMessageEvent, target_id: str, max_rounds: int):
+        """[上层] 深度优先抓取：固定拉取 max_rounds 轮"""
+        group_id = event.get_group_id()
+        
+        collected_texts = []
+        cursor_seq = 0
+        error_strike = [0] 
+        real_rounds = 0
+        
+        while real_rounds < max_rounds:
+            batch, next_cursor, success = await self._fetch_next_batch_robust(
+                event.bot, group_id, cursor_seq, error_strike
+            )
+            
+            if not success:
+                if next_cursor <= 0: break
+                cursor_seq = next_cursor
+                await asyncio.sleep(0.1)
+                continue
+            
+            if not batch: break
+                
+            for msg in reversed(batch): 
+                if str(msg["sender"]["user_id"]) != target_id: continue
+                try:
+                    msg_content = msg.get("message", [])
+                    text = ""
+                    if isinstance(msg_content, str): text = msg_content
+                    else: text = "".join([s["data"]["text"] for s in msg_content if s.get("type") == "text"])
+                    
+                    if text.strip(): 
+                        collected_texts.append(text.strip())
+                except: continue
+
+            cursor_seq = next_cursor
+            real_rounds += 1
+            await asyncio.sleep(0.2) 
+
+        return collected_texts[::-1], real_rounds
+
+    # ================= Provider 查找逻辑 =================
 
     def _force_find_provider(self, target_id: str):
-        """深度查找 Provider"""
         if not target_id: return None
         target_id_lower = target_id.lower()
         
@@ -106,8 +163,11 @@ class PortrayalPlugin(Star):
         
         if not provider:
             if cfg_provider_id:
-                logger.warning(f"Portrayal: 指定模型 '{cfg_provider_id}' 未找到，使用默认模型。")
-            provider = self.context.get_using_provider()
+                logger.warning(f"Portrayal: 指定模型 '{cfg_provider_id}' 未找到，正在尝试使用默认模型。")
+            if hasattr(event, "unified_msg_origin"):
+                provider = self.context.get_using_provider(event.unified_msg_origin)
+            else:
+                provider = self.context.get_using_provider()
             
         if not provider:
             yield event.plain_result("❌ 未找到可用的 LLM 服务。")
@@ -120,24 +180,35 @@ class PortrayalPlugin(Star):
         nickname, gender = await self._get_user_nickname_gender(event, target_id)
         
         args = event.message_str.split()
+        custom_rounds = None
+        force_refresh = False
+        for arg in args:
+            if arg.isdigit(): custom_rounds = int(arg)
+            if "更新" in arg or "刷新" in arg: force_refresh = True
+            
+        max_rounds = custom_rounds if custom_rounds else self.config.get("max_query_rounds", 20)
+        max_rounds = min(100, max(1, max_rounds))
         
-        # 判断是否手动输入了轮数
-        has_custom_rounds = args and args[-1].isdigit()
-        rounds = int(args[-1]) if has_custom_rounds else self.config.get("max_query_rounds", 20)
-        rounds = min(50, max(1, rounds))
+        batch_size = self.config.get("batch_size", 100)
+        total_raw_msgs = max_rounds * batch_size
 
-        # 根据是否手动输入轮数，发送不同的提示消息
-        if has_custom_rounds:
-            yield event.plain_result(f"🔍 正在回溯 {nickname} 的最近 {rounds} 轮消息并构建画像，请稍候...")
+        texts = []
+        # [修改] 准备一个变量来存储“回溯结束”的文案，暂不发送
+        completion_text = ""
+
+        if not force_refresh and target_id in self.texts_cache:
+            texts = self.texts_cache[target_id]
+            completion_text = f"✅ 从缓存加载：找到了 {len(texts)} 条有效发言。"
         else:
-            yield event.plain_result(f"🔍 正在回溯 {nickname} 的最近消息并构建画像，请稍候...")
+            yield event.plain_result(f"🔍 正在深度回溯 {nickname} 的最近消息 (深度: {max_rounds}轮 / 约{total_raw_msgs}条)...")
+            texts, rounds_done = await self._fetch_user_history_smart(event, target_id, max_rounds)
+            if texts:
+                self.texts_cache[target_id] = texts
+                completion_text = f"✅ 回溯结束：在 {rounds_done} 轮中找到了 {len(texts)} 条有效发言。"
 
-        history = await self._fetch_user_history(event, target_id, rounds)
-        if not history:
-            yield event.plain_result(f"⚠️ 未找到 {nickname} 的有效发言记录。")
+        if not texts or len(texts) < 3:
+            yield event.plain_result(f"⚠️ {nickname} 的发言太少了（仅 {len(texts)} 条），无法生成准确画像。")
             return
-        
-        logger.info(f"Portrayal: 收集到 {len(history)} 条发言")
 
         gender_cn = "他" if gender == "male" else ("她" if gender == "female" else "TA")
         system_prompt = self.config.get("system_prompt_template", "").format(
@@ -145,45 +216,47 @@ class PortrayalPlugin(Star):
         )
         
         try:
+            context_payload = [{"role": "user", "content": t} for t in texts]
+            
             response = await provider.text_chat(
                 prompt=f"以下是 {nickname} 的聊天记录，请根据 System Prompt 要求进行分析：",
                 system_prompt=system_prompt,
-                contexts=history
+                contexts=context_payload
             )
             
             result_text = response.completion_text
             enable_image = self.config.get("enable_image_output", False)
-            
             sent_success = False
             
             if enable_image:
                 try:
-                    img_result = await self.text_to_image(result_text)
+                    img_result = None
+                    if hasattr(self, "text_to_image"): img_result = await self.text_to_image(result_text)
+                    elif hasattr(self.context, "text_to_image"): img_result = await self.context.text_to_image(result_text)
                     
                     if img_result:
                         chain = []
-                        # 1. 引用原文 (保留)
-                        if hasattr(event.message_obj, "message_id"):
+                        # 1. 引用原文
+                        if hasattr(event.message_obj, "message_id"): 
                             chain.append(Reply(id=event.message_obj.message_id))
                         
-                        # 2. 艾特发送者 (已移除)
-                        # chain.append(At(qq=event.get_sender_id())) 
-                        
-                        # 3. 图片 (兼容 URL 和 本地路径)
-                        if str(img_result).startswith("http"):
-                            chain.append(Image.fromURL(img_result))
-                        else:
-                            chain.append(Image.fromFileSystem(img_result))
+                        # 2. [修改] 插入回溯结束的文案
+                        if completion_text:
+                            chain.append(Plain(completion_text + "\n"))
+
+                        # 3. 插入图片
+                        if str(img_result).startswith("http"): chain.append(Image.fromURL(img_result))
+                        else: chain.append(Image.fromFileSystem(img_result))
                         
                         yield event.chain_result(chain)
                         sent_success = True
-                    else:
-                        logger.warning("Portrayal: 图片生成返回为空，转为纯文本发送。")
                 except Exception as e:
-                    logger.error(f"Portrayal: 图片构建或发送失败: {e}，正在尝试回退到纯文本模式。")
+                    logger.warning(f"Portrayal: 转图失败 {e}，回退文本")
             
             if not sent_success:
-                yield event.plain_result(result_text)
+                # 纯文本模式下，也带上回溯结束的文案
+                final_msg = f"{completion_text}\n\n{result_text}" if completion_text else result_text
+                yield event.plain_result(final_msg)
 
         except Exception as e:
             logger.error(f"画像生成失败: {e}")
