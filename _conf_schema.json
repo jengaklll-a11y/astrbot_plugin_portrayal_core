@@ -9,19 +9,21 @@
         "description": "是否生成图片",
         "type": "bool",
         "default": true,
-        "hint": "开启后将把分析结果渲染为图片发送（需要服务端支持绘图或自行实现渲染逻辑），关闭则发送纯文本"
+        "hint": "开启后将把分析结果渲染为图片发送，关闭则发送纯文本"
     },
-    "max_msg_count": {
-        "description": "分析使用的最大消息条数",
+    "batch_size": {
+        "description": "每轮拉取消息数(条)",
         "type": "int",
-        "default": 500,
-        "slider": { "min": 50, "max": 2000, "step": 50 }
+        "default": 100,
+        "slider": { "min": 20, "max": 200, "step": 10 },
+        "hint": "单次API请求拉取的原始消息数量（OneBot协议通常上限为100-200）"
     },
     "max_query_rounds": {
-        "description": "默认回溯历史消息的轮数(每轮约100条)",
+        "description": "默认回溯历史消息的轮数",
         "type": "int",
         "default": 20,
-        "slider": { "min": 1, "max": 50, "step": 1 }
+        "slider": { "min": 1, "max": 100, "step": 1 },
+        "hint": "回溯深度 = 轮数 * 每轮消息数。例如 20轮 * 100条 = 回溯最近2000条群消息。"
     },
     "system_prompt_template": {
         "description": "LLM 系统提示词模板",
