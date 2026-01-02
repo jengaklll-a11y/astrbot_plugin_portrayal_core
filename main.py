@@ -29,12 +29,20 @@ class PortrayalPlugin(Star):
         except Exception:
             return "群友", "unknown"
 
-    # ================= 历史抓取逻辑 (配置化 Batch Size) =================
+    # ================= 历史抓取逻辑 (已修复死循环问题) =================
 
     async def _fetch_next_batch_robust(self, client, group_id, cursor_seq, error_strike_ref):
-        """[底层] 获取单批次消息 (防1200错误 + 指数跳跃 + 动态Batch)"""
+        """[底层] 获取单批次消息 (防1200错误 + 指数跳跃 + 动态Batch + 熔断机制)"""
         batch_size = self.config.get("batch_size", 100)
         
+        # --- [修复] 新增熔断检查：防止无限重试 ---
+        MAX_RETRY_STRIKE = 15 
+        if error_strike_ref[0] > MAX_RETRY_STRIKE:
+            logger.error(f"Portrayal: 连续失败次数过多 ({error_strike_ref[0]}次)，触发熔断停止回溯，避免死循环。")
+            # 返回 0 让上层 _fetch_user_history_smart 退出循环
+            return [], 0, False 
+        # --------------------------------------
+
         try:
             payload = {
                 "group_id": int(group_id),
@@ -53,6 +61,7 @@ class PortrayalPlugin(Star):
             oldest_msg = batch[0]
             next_cursor = int(oldest_msg.get("message_seq") or oldest_msg.get("message_id") or 0)
             
+            # 如果成功获取，重置错误计数器
             if error_strike_ref[0] > 0:
                 error_strike_ref[0] = 0
                 
@@ -60,20 +69,25 @@ class PortrayalPlugin(Star):
 
         except Exception as e:
             err_msg = str(e)
+            # 处理 1200 错误或消息不存在的情况
             if "1200" in err_msg or "不存在" in err_msg:
                 error_strike_ref[0] += 1
                 current_strike = error_strike_ref[0]
-                base_jump = max(50, batch_size) 
-                jump_step = base_jump * (2 ** (min(current_strike, 10) - 1))
                 
-                if current_strike == 1 or current_strike % 5 == 0:
-                    logger.warning(f"Portrayal: 游标 {cursor_seq} 处断层 (重试 {current_strike} 次)，向下跳跃 {jump_step} 条...")
+                base_jump = max(50, batch_size) 
+                # 限制指数最大倍数，防止溢出
+                jump_step = base_jump * (2 ** (min(current_strike, 8) - 1))
+                
+                # 仅在前几次或每5次打印一次警告，减少日志刷屏
+                if current_strike <= 5 or current_strike % 5 == 0:
+                    logger.warning(f"Portrayal: 游标 {cursor_seq} 处断层 (重试 {current_strike}/{MAX_RETRY_STRIKE} 次)，尝试向下跳跃 {jump_step} 条...")
                 
                 new_cursor = cursor_seq - jump_step
                 return [], new_cursor, False 
             else:
                 logger.warning(f"Portrayal: API请求中断: {e}")
-                return [], 0, True
+                # 遇到其他未知错误，停止尝试，防止死循环
+                return [], 0, False
 
     async def _fetch_user_history_smart(self, event: AiocqhttpMessageEvent, target_id: str, max_rounds: int):
         """[上层] 深度优先抓取：固定拉取 max_rounds 轮"""
@@ -90,6 +104,7 @@ class PortrayalPlugin(Star):
             )
             
             if not success:
+                # 如果返回的 next_cursor <= 0，说明到底了或者触发了熔断，直接退出
                 if next_cursor <= 0: break
                 cursor_seq = next_cursor
                 await asyncio.sleep(0.1)
@@ -193,7 +208,7 @@ class PortrayalPlugin(Star):
         total_raw_msgs = max_rounds * batch_size
 
         texts = []
-        # [修改] 准备一个变量来存储“回溯结束”的文案，暂不发送
+        # 准备一个变量来存储“回溯结束”的文案，暂不发送
         completion_text = ""
 
         if not force_refresh and target_id in self.texts_cache:
@@ -240,7 +255,7 @@ class PortrayalPlugin(Star):
                         if hasattr(event.message_obj, "message_id"): 
                             chain.append(Reply(id=event.message_obj.message_id))
                         
-                        # 2. [修改] 插入回溯结束的文案
+                        # 2. 插入回溯结束的文案
                         if completion_text:
                             chain.append(Plain(completion_text + "\n"))
 
