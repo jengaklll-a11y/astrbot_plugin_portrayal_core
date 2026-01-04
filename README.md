@@ -1,6 +1,6 @@
 # AstrBot Plugin Portrayal Core
 
-_✨ 深度人物画像插件 (Core 重构版) ✨_  
+_✨ 人物画像 (Core) ✨_  
 
 ## 💡 介绍
 
@@ -47,7 +47,3 @@ A: 请检查 AstrBot 是否配置了模型提供商。如果你在插件配置�
 
 **Q: 图片发送失败，转为纯文本了？**
 A: 插件内置了自动降级机制。如果服务器网络原因导致图片无法上传或渲染失败，会自动发送文本结果，确保你一定能收到回复。
-
-## 📜 开源协议
-
-[MIT License](https://www.google.com/search?q=LICENSE)
