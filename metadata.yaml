@@ -2,6 +2,6 @@ name: astrbot_plugin_portrayal_core
 display_name: 人物画像(Core)
 desc: 极简版群友性格分析插件
 help: 使用 /画像 或 /画像 @某人 即可生成性格侧写
-version: v1.1.1
+version: v1.1.2
 author: jengaklll-a11y
 repo: https://github.com/jengaklll-a11y/astrbot_plugin_portrayal_core
